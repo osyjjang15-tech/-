@@ -1,0 +1,740 @@
+-- // BT 타워 (이펙트 강화 버전)
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "BT 타워",
+   LoadingTitle = "BT 타워",
+   LoadingSubtitle = "Effects + Kill",
+   ConfigurationSaving = {
+      Enabled = true,
+      FolderName = "BTTower",
+      FileName = "Config"
+   },
+   Discord = { Enabled = false },
+   KeySystem = false,
+})
+
+-- // 서비스
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local VirtualUser = game:GetService("VirtualUser")
+local Debris = game:GetService("Debris")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- // ControlModule
+local ControlModule
+pcall(function()
+   ControlModule = require(LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+end)
+
+-- // 상태 변수
+local InfJumpEnabled = false
+local Flying = false
+local NoclipEnabled = false
+local ClickTPEnabled = false
+local GodModeEnabled = false
+local NoFallDamage = false
+local FullbrightEnabled = false
+local ESPEnabled = false
+local AntiAFKEnabled = false
+local KillAuraEnabled = false
+local KillAuraRange = 25
+local FlySpeed = 50
+local BodyVelocity, BodyGyro
+local FlyConnection
+local ESPFolder = Instance.new("Folder")
+ESPFolder.Name = "BTEsp"
+ESPFolder.Parent = game.CoreGui
+
+-- // 유틸
+local function GetCharacter()
+   return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function GetHumanoid()
+   local char = GetCharacter()
+   return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetHRP()
+   local char = GetCharacter()
+   return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ====================== 이펙트 함수 ======================
+
+-- 폭발 이펙트
+local function CreateExplosionEffect(position)
+   local explosion = Instance.new("Explosion")
+   explosion.Position = position
+   explosion.BlastRadius = 8
+   explosion.BlastPressure = 0 -- 물리 영향 없이 시각만
+   explosion.Visible = true
+   explosion.Parent = workspace
+   Debris:AddItem(explosion, 3)
+end
+
+-- 파티클 폭발
+local function CreateParticleBurst(position)
+   local part = Instance.new("Part")
+   part.Size = Vector3.new(0.5, 0.5, 0.5)
+   part.Position = position
+   part.Anchored = true
+   part.CanCollide = false
+   part.Transparency = 1
+   part.Parent = workspace
+
+   local emitter = Instance.new("ParticleEmitter")
+   emitter.Texture = "rbxassetid://241650934" -- 기본 스파크
+   emitter.Color = ColorSequence.new({
+      ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 50, 50)),
+      ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 150, 0))
+   })
+   emitter.Size = NumberSequence.new({
+      NumberSequenceKeypoint.new(0, 1.5),
+      NumberSequenceKeypoint.new(1, 0)
+   })
+   emitter.Lifetime = NumberRange.new(0.8, 1.4)
+   emitter.Speed = NumberRange.new(15, 35)
+   emitter.SpreadAngle = Vector2.new(180, 180)
+   emitter.Rate = 0
+   emitter.Parent = part
+
+   emitter:Emit(40)
+   Debris:AddItem(part, 2)
+end
+
+-- KILL 텍스트 이펙트
+local function CreateKillText(position, playerName)
+   local billboard = Instance.new("BillboardGui")
+   billboard.Size = UDim2.new(0, 150, 0, 50)
+   billboard.StudsOffset = Vector3.new(0, 4, 0)
+   billboard.AlwaysOnTop = true
+   billboard.Parent = workspace
+
+   local part = Instance.new("Part")
+   part.Size = Vector3.new(1, 1, 1)
+   part.Position = position
+   part.Anchored = true
+   part.CanCollide = false
+   part.Transparency = 1
+   part.Parent = workspace
+   billboard.Adornee = part
+
+   local label = Instance.new("TextLabel")
+   label.Size = UDim2.new(1, 0, 1, 0)
+   label.BackgroundTransparency = 1
+   label.Text = "KILL"
+   label.TextColor3 = Color3.fromRGB(255, 30, 30)
+   label.TextStrokeTransparency = 0.3
+   label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+   label.Font = Enum.Font.GothamBlack
+   label.TextSize = 28
+   label.Parent = billboard
+
+   -- 위로 떠오르면서 사라지는 트윈
+   local tween = TweenService:Create(billboard, TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+      StudsOffset = Vector3.new(0, 8, 0)
+   })
+   tween:Play()
+
+   local fade = TweenService:Create(label, TweenInfo.new(1.2), {
+      TextTransparency = 1,
+      TextStrokeTransparency = 1
+   })
+   fade:Play()
+
+   Debris:AddItem(part, 1.5)
+   Debris:AddItem(billboard, 1.5)
+end
+
+-- 히트 시 빨간 하이라이트
+local function CreateHitHighlight(character)
+   if not character then return end
+   local highlight = Instance.new("Highlight")
+   highlight.FillColor = Color3.fromRGB(255, 0, 0)
+   highlight.OutlineColor = Color3.fromRGB(255, 80, 80)
+   highlight.FillTransparency = 0.3
+   highlight.OutlineTransparency = 0
+   highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+   highlight.Parent = character
+
+   Debris:AddItem(highlight, 0.6)
+end
+
+-- Kill Aura 범위 표시 (발 밑에 원)
+local RangePart = nil
+local function UpdateKillAuraRangeVisual()
+   if RangePart then RangePart:Destroy() RangePart = nil end
+   if not KillAuraEnabled then return end
+
+   local hrp = GetHRP()
+   if not hrp then return end
+
+   RangePart = Instance.new("Part")
+   RangePart.Name = "KillAuraRange"
+   RangePart.Anchored = true
+   RangePart.CanCollide = false
+   RangePart.Size = Vector3.new(KillAuraRange * 2, 0.2, KillAuraRange * 2)
+   RangePart.Material = Enum.Material.Neon
+   RangePart.Color = Color3.fromRGB(255, 40, 40)
+   RangePart.Transparency = 0.7
+   RangePart.Shape = Enum.PartType.Cylinder
+   RangePart.CFrame = hrp.CFrame * CFrame.Angles(0, 0, math.rad(90))
+   RangePart.Parent = workspace
+
+   -- 따라다니기
+   local conn
+   conn = RunService.RenderStepped:Connect(function()
+      if not KillAuraEnabled or not RangePart or not GetHRP() then
+         if RangePart then RangePart:Destroy() end
+         conn:Disconnect()
+         return
+      end
+      RangePart.Size = Vector3.new(KillAuraRange * 2, 0.2, KillAuraRange * 2)
+      RangePart.CFrame = GetHRP().CFrame * CFrame.Angles(0, 0, math.rad(90))
+   end)
+end
+
+-- ====================== 킬 함수 (이펙트 포함) ======================
+local function KillPlayer(targetPlayer)
+   if not targetPlayer or targetPlayer == LocalPlayer then return false end
+   local char = targetPlayer.Character
+   if not char then return false end
+   local hum = char:FindFirstChildOfClass("Humanoid")
+   local hrp = char:FindFirstChild("HumanoidRootPart")
+   if not hum or hum.Health <= 0 or not hrp then return false end
+
+   -- 이펙트 먼저 재생
+   CreateExplosionEffect(hrp.Position)
+   CreateParticleBurst(hrp.Position)
+   CreateKillText(hrp.Position, targetPlayer.Name)
+   CreateHitHighlight(char)
+
+   -- 실제 킬 시도
+   pcall(function() hum.Health = 0 end)
+   pcall(function() hum:TakeDamage(math.huge) end)
+   pcall(function() hum:ChangeState(Enum.HumanoidStateType.Dead) end)
+
+   return true
+end
+
+-- // Infinite Jump
+UserInputService.JumpRequest:Connect(function()
+   if InfJumpEnabled then
+      local hum = GetHumanoid()
+      if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+   end
+end)
+
+-- // Noclip
+RunService.Stepped:Connect(function()
+   if NoclipEnabled then
+      local char = LocalPlayer.Character
+      if char then
+         for _, part in pairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+         end
+      end
+   end
+end)
+
+-- // God Mode + No Fall Damage
+RunService.Heartbeat:Connect(function()
+   local hum = GetHumanoid()
+   if hum then
+      if GodModeEnabled then
+         hum.MaxHealth = math.huge
+         hum.Health = math.huge
+      end
+      if NoFallDamage then
+         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+         hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+      end
+   end
+end)
+
+-- // Kill Aura
+RunService.Heartbeat:Connect(function()
+   if not KillAuraEnabled then return end
+   local myHRP = GetHRP()
+   if not myHRP then return end
+
+   for _, player in pairs(Players:GetPlayers()) do
+      if player ~= LocalPlayer and player.Character then
+         local targetHRP = player.Character:FindFirstChild("HumanoidRootPart")
+         local targetHum = player.Character:FindFirstChildOfClass("Humanoid")
+         if targetHRP and targetHum and targetHum.Health > 0 then
+            local distance = (myHRP.Position - targetHRP.Position).Magnitude
+            if distance <= KillAuraRange then
+               KillPlayer(player)
+            end
+         end
+      end
+   end
+end)
+
+-- // Click / Touch Teleport
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+   if gameProcessed or not ClickTPEnabled then return end
+   if input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.Touch then
+      local mouse = LocalPlayer:GetMouse()
+      local hrp = GetHRP()
+      if hrp and mouse.Hit then
+         hrp.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+      end
+   end
+end)
+
+-- // Anti-AFK
+LocalPlayer.Idled:Connect(function()
+   if AntiAFKEnabled then
+      VirtualUser:CaptureController()
+      VirtualUser:ClickButton2(Vector2.new())
+   end
+end)
+
+-- // Fly
+local function StartFly()
+   local hrp = GetHRP()
+   local hum = GetHumanoid()
+   if not hrp or not hum then return end
+
+   BodyVelocity = Instance.new("BodyVelocity")
+   BodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+   BodyVelocity.Velocity = Vector3.zero
+   BodyVelocity.Parent = hrp
+
+   BodyGyro = Instance.new("BodyGyro")
+   BodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+   BodyGyro.P = 9e4
+   BodyGyro.Parent = hrp
+
+   hum.PlatformStand = true
+
+   FlyConnection = RunService.RenderStepped:Connect(function()
+      if not Flying then return end
+      local cam = workspace.CurrentCamera
+      local move = Vector3.zero
+
+      if ControlModule then
+         local moveVector = ControlModule:GetMoveVector()
+         move = (cam.CFrame.LookVector * -moveVector.Z) + (cam.CFrame.RightVector * moveVector.X)
+      else
+         if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + cam.CFrame.LookVector end
+         if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - cam.CFrame.LookVector end
+         if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - cam.CFrame.RightVector end
+         if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + cam.CFrame.RightVector end
+      end
+
+      if UserInputService:IsKeyDown(Enum.KeyCode.Space) or (GetHumanoid() and GetHumanoid().Jump) then
+         move = move + Vector3.new(0, 1, 0)
+      end
+      if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+         move = move - Vector3.new(0, 1, 0)
+      end
+
+      BodyVelocity.Velocity = move.Magnitude > 0 and move.Unit * FlySpeed or Vector3.zero
+      BodyGyro.CFrame = cam.CFrame
+   end)
+end
+
+local function StopFly()
+   if FlyConnection then FlyConnection:Disconnect() FlyConnection = nil end
+   if BodyVelocity then BodyVelocity:Destroy() BodyVelocity = nil end
+   if BodyGyro then BodyGyro:Destroy() BodyGyro = nil end
+   local hum = GetHumanoid()
+   if hum then hum.PlatformStand = false end
+end
+
+-- // ESP
+local function CreateESP(player)
+   if player == LocalPlayer then return end
+   local char = player.Character
+   if not char then return end
+   local hrp = char:FindFirstChild("HumanoidRootPart")
+   if not hrp then return end
+
+   local billboard = Instance.new("BillboardGui")
+   billboard.Name = player.Name
+   billboard.Adornee = hrp
+   billboard.Size = UDim2.new(0, 200, 0, 50)
+   billboard.StudsOffset = Vector3.new(0, 3, 0)
+   billboard.AlwaysOnTop = true
+   billboard.Parent = ESPFolder
+
+   local nameLabel = Instance.new("TextLabel")
+   nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+   nameLabel.BackgroundTransparency = 1
+   nameLabel.Text = player.Name
+   nameLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+   nameLabel.TextStrokeTransparency = 0.5
+   nameLabel.Font = Enum.Font.GothamBold
+   nameLabel.TextSize = 14
+   nameLabel.Parent = billboard
+
+   local distLabel = Instance.new("TextLabel")
+   distLabel.Size = UDim2.new(1, 0, 0.5, 0)
+   distLabel.Position = UDim2.new(0, 0, 0.5, 0)
+   distLabel.BackgroundTransparency = 1
+   distLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+   distLabel.TextStrokeTransparency = 0.5
+   distLabel.Font = Enum.Font.Gotham
+   distLabel.TextSize = 12
+   distLabel.Parent = billboard
+
+   local connection
+   connection = RunService.RenderStepped:Connect(function()
+      if not ESPEnabled or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+         billboard:Destroy()
+         connection:Disconnect()
+         return
+      end
+      local dist = 0
+      if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+         dist = (LocalPlayer.Character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+      end
+      distLabel.Text = math.floor(dist) .. " studs"
+   end)
+end
+
+local function ClearESP()
+   ESPFolder:ClearAllChildren()
+end
+
+local function UpdateESP()
+   ClearESP()
+   if ESPEnabled then
+      for _, player in pairs(Players:GetPlayers()) do
+         CreateESP(player)
+      end
+   end
+end
+
+Players.PlayerAdded:Connect(function(player)
+   player.CharacterAdded:Connect(function()
+      if ESPEnabled then
+         task.wait(1)
+         CreateESP(player)
+      end
+   end)
+end)
+
+-- // Fullbright
+local function SetFullbright(enabled)
+   if enabled then
+      Lighting.Brightness = 2
+      Lighting.ClockTime = 14
+      Lighting.FogEnd = 100000
+      Lighting.GlobalShadows = false
+      Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+   else
+      Lighting.Brightness = 1
+      Lighting.FogEnd = 1000
+      Lighting.GlobalShadows = true
+   end
+end
+
+-- ===================== UI =====================
+
+local PlayerTab = Window:CreateTab("Player", 4483362458)
+PlayerTab:CreateSection("기본 이동")
+
+PlayerTab:CreateSlider({
+   Name = "WalkSpeed",
+   Range = {16, 300},
+   Increment = 1,
+   CurrentValue = 16,
+   Flag = "WalkSpeed",
+   Callback = function(Value)
+      local hum = GetHumanoid()
+      if hum then hum.WalkSpeed = Value end
+   end,
+})
+
+PlayerTab:CreateSlider({
+   Name = "JumpPower",
+   Range = {50, 400},
+   Increment = 5,
+   CurrentValue = 50,
+   Flag = "JumpPower",
+   Callback = function(Value)
+      local hum = GetHumanoid()
+      if hum then
+         hum.JumpPower = Value
+         hum.UseJumpPower = true
+      end
+   end,
+})
+
+PlayerTab:CreateToggle({
+   Name = "Infinite Jump",
+   CurrentValue = false,
+   Flag = "InfJump",
+   Callback = function(Value) InfJumpEnabled = Value end,
+})
+
+PlayerTab:CreateToggle({
+   Name = "Fly (모바일+PC)",
+   CurrentValue = false,
+   Flag = "Fly",
+   Callback = function(Value)
+      Flying = Value
+      if Value then StartFly() else StopFly() end
+   end,
+})
+
+PlayerTab:CreateSlider({
+   Name = "Fly Speed",
+   Range = {20, 250},
+   Increment = 5,
+   CurrentValue = 50,
+   Flag = "FlySpeed",
+   Callback = function(Value) FlySpeed = Value end,
+})
+
+PlayerTab:CreateToggle({
+   Name = "Noclip",
+   CurrentValue = false,
+   Flag = "Noclip",
+   Callback = function(Value) NoclipEnabled = Value end,
+})
+
+PlayerTab:CreateSection("생존")
+
+PlayerTab:CreateToggle({
+   Name = "God Mode (무적)",
+   CurrentValue = false,
+   Flag = "GodMode",
+   Callback = function(Value) GodModeEnabled = Value end,
+})
+
+PlayerTab:CreateToggle({
+   Name = "No Fall Damage",
+   CurrentValue = false,
+   Flag = "NoFall",
+   Callback = function(Value) NoFallDamage = Value end,
+})
+
+-- Kill 탭
+local KillTab = Window:CreateTab("Kill", 4483362458)
+KillTab:CreateSection("플레이어 처치")
+
+local PlayerNames = {}
+local function UpdatePlayerList()
+   PlayerNames = {}
+   for _, player in pairs(Players:GetPlayers()) do
+      if player ~= LocalPlayer then
+         table.insert(PlayerNames, player.Name)
+      end
+   end
+end
+UpdatePlayerList()
+
+local KillDropdown = KillTab:CreateDropdown({
+   Name = "플레이어 선택",
+   Options = PlayerNames,
+   CurrentOption = {"없음"},
+   MultipleOptions = false,
+   Flag = "KillPlayer",
+   Callback = function() end,
+})
+
+KillTab:CreateButton({
+   Name = "선택한 플레이어 죽이기 + 이펙트",
+   Callback = function()
+      local selected = KillDropdown.CurrentOption
+      if selected and selected[1] and selected[1] ~= "없음" then
+         local target = Players:FindFirstChild(selected[1])
+         if target then
+            local success = KillPlayer(target)
+            Rayfield:Notify({
+               Title = "Kill",
+               Content = success and (selected[1] .. " 처치 + 이펙트!") or "실패",
+               Duration = 3
+            })
+         end
+      end
+   end,
+})
+
+KillTab:CreateButton({
+   Name = "플레이어 목록 새로고침",
+   Callback = function()
+      UpdatePlayerList()
+      KillDropdown:Refresh(PlayerNames, true)
+   end,
+})
+
+KillTab:CreateSection("자동 처치 + 이펙트")
+
+KillTab:CreateToggle({
+   Name = "Kill Aura",
+   CurrentValue = false,
+   Flag = "KillAura",
+   Callback = function(Value)
+      KillAuraEnabled = Value
+      UpdateKillAuraRangeVisual()
+      Rayfield:Notify({
+         Title = "Kill Aura",
+         Content = Value and ("ON (범위 표시됨)") or "OFF",
+         Duration = 3
+      })
+   end,
+})
+
+KillTab:CreateSlider({
+   Name = "Kill Aura 범위",
+   Range = {10, 100},
+   Increment = 5,
+   CurrentValue = 25,
+   Flag = "KillAuraRange",
+   Callback = function(Value)
+      KillAuraRange = Value
+      if KillAuraEnabled then
+         UpdateKillAuraRangeVisual()
+      end
+   end,
+})
+
+KillTab:CreateButton({
+   Name = "모든 플레이어 죽이기 (이펙트 포함)",
+   Callback = function()
+      local count = 0
+      for _, player in pairs(Players:GetPlayers()) do
+         if player ~= LocalPlayer then
+            if KillPlayer(player) then
+               count = count + 1
+               task.wait(0.15) -- 이펙트가 겹치지 않게 약간 딜레이
+            end
+         end
+      end
+      Rayfield:Notify({
+         Title = "Kill All",
+         Content = count .. "명 처치 + 이펙트 완료",
+         Duration = 3
+      })
+   end,
+})
+
+-- Teleport 탭
+local TeleportTab = Window:CreateTab("Teleport", 4483362458)
+
+local TPDropdown = TeleportTab:CreateDropdown({
+   Name = "플레이어 선택",
+   Options = PlayerNames,
+   CurrentOption = {"없음"},
+   MultipleOptions = false,
+   Flag = "PlayerTP",
+   Callback = function() end,
+})
+
+TeleportTab:CreateButton({
+   Name = "선택한 플레이어에게 이동",
+   Callback = function()
+      local selected = TPDropdown.CurrentOption
+      if selected and selected[1] and selected[1] ~= "없음" then
+         local target = Players:FindFirstChild(selected[1])
+         if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = GetHRP()
+            if hrp then
+               hrp.CFrame = target.Character.HumanoidRootPart.CFrame + Vector3.new(0, 3, 0)
+            end
+         end
+      end
+   end,
+})
+
+TeleportTab:CreateButton({
+   Name = "목록 새로고침",
+   Callback = function()
+      UpdatePlayerList()
+      TPDropdown:Refresh(PlayerNames, true)
+      KillDropdown:Refresh(PlayerNames, true)
+   end,
+})
+
+TeleportTab:CreateToggle({
+   Name = "Click / Touch Teleport",
+   CurrentValue = false,
+   Flag = "ClickTP",
+   Callback = function(Value) ClickTPEnabled = Value end,
+})
+
+-- Visual 탭
+local VisualTab = Window:CreateTab("Visual", 4483362458)
+
+VisualTab:CreateToggle({
+   Name = "Fullbright",
+   CurrentValue = false,
+   Flag = "Fullbright",
+   Callback = function(Value)
+      FullbrightEnabled = Value
+      SetFullbright(Value)
+   end,
+})
+
+VisualTab:CreateSlider({
+   Name = "FOV",
+   Range = {70, 120},
+   Increment = 1,
+   CurrentValue = 70,
+   Flag = "FOV",
+   Callback = function(Value) Camera.FieldOfView = Value end,
+})
+
+VisualTab:CreateToggle({
+   Name = "Player ESP",
+   CurrentValue = false,
+   Flag = "ESP",
+   Callback = function(Value)
+      ESPEnabled = Value
+      if Value then UpdateESP() else ClearESP() end
+   end,
+})
+
+-- Misc 탭
+local MiscTab = Window:CreateTab("Misc", 4483362458)
+
+MiscTab:CreateToggle({
+   Name = "Anti-AFK",
+   CurrentValue = false,
+   Flag = "AntiAFK",
+   Callback = function(Value) AntiAFKEnabled = Value end,
+})
+
+MiscTab:CreateButton({
+   Name = "캐릭터 리셋",
+   Callback = function()
+      local hum = GetHumanoid()
+      if hum then hum.Health = 0 end
+   end,
+})
+
+MiscTab:CreateButton({
+   Name = "서버 재접속",
+   Callback = function()
+      TeleportService:Teleport(game.PlaceId, LocalPlayer)
+   end,
+})
+
+-- 캐릭터 리스폰 처리
+LocalPlayer.CharacterAdded:Connect(function()
+   task.wait(0.8)
+   if Flying then StartFly() end
+   if ESPEnabled then task.wait(1) UpdateESP() end
+   if KillAuraEnabled then UpdateKillAuraRangeVisual() end
+end)
+
+Rayfield:LoadConfiguration()
+
+Rayfield:Notify({
+   Title = "BT 타워",
+   Content = "이펙트 강화 버전 로드 완료!",
+   Duration = 5
+})
